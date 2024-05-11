@@ -1,0 +1,75 @@
+- name: Build Docker image locally and replace it on server
+  hosts: raspberry
+  remote_user: user
+  vars:
+    repo:
+    force: false
+
+  tasks:
+    - name: Prepare variables
+      local_action:
+        module: set_fact
+        name: "{{ repo|regex_replace('^.+\/(.+)$', '\\1')|lower }}"
+
+    - name: Prepare variables
+      local_action:
+        module: set_fact
+        repo_folder_raw: "{{ playbook_dir }}/../code/{{ name }}"
+        docker_tag: "self:{{ name }}"
+
+    - name: Prepare variables
+      local_action:
+        module: set_fact
+        repo_folder: "{{ repo_folder_raw|normpath }}"
+
+    - name: Output
+      debug:
+        msg: 
+          - "Fetching {{ repo }} to {{ repo_folder }}"
+
+    - name: 🏠 Fetch newest version
+      local_action:
+        module: git
+        repo: "{{ repo }}"
+        dest: "{{ repo_folder }}"
+
+    - name: 🏠 Build image
+      local_action:
+        module: community.docker.docker_image_build
+        name: "{{ docker_tag }}"
+        path: "{{ repo_folder }}"
+        platform: linux/arm64
+
+    - name: 🏠 Save Docker image
+      local_action: 
+        module: docker_image
+        name: "{{ docker_tag }}"
+        archive_path: "{{ repo_folder }}/{{ name }}.tar"
+        source: pull
+      register: save_docker_image
+
+    - name: Copy Docker image to server
+      ansible.builtin.copy:
+        src:  "{{ repo_folder }}/{{ name }}.tar"
+        dest: ~/
+      when: save_docker_image.changed == "true" or force == "true"
+
+    - name: Load image
+      community.docker.docker_image_load:
+        path: "~/{{ name }}.tar"
+      register: load_image
+      when: save_docker_image.changed == "true" or force == "true"
+
+    - name: Stop existing docker container
+      command: "docker-compose stop {{ name }}"
+      register: stop_docker
+      when: save_docker_image.changed == "true" or force == "true"
+
+    - name: Start new docker container
+      command: "docker-compose up -d {{ name }}"
+      when: stop_docker.changed == "true" or force == "true"
+
+    - name: Clean up
+      command: "rm -f ~/{{ name }}.tar"
+      when: save_docker_image.changed == "true" or force == "true"
+
